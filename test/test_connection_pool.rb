@@ -774,6 +774,48 @@ class TestConnectionPool < Minitest::Test
     refute_equal(prefork_connection, pool.with { |c| c })
   end
 
+  def test_after_fork_callback_when_close_raises
+    skip("MRI feature") unless Process.respond_to?(:fork)
+    GC.start # cleanup instances created by other tests
+
+    closed = []
+    connection_class = Class.new do
+      define_method(:close) do
+        closed << self
+        raise IOError, "close failed"
+      end
+    end
+    pools = Array.new(2) { ConnectionPool.new(size: 2) { connection_class.new } }
+    prefork_connections = pools.flat_map do |pool|
+      pool.with { |c| [c, Thread.new { pool.with { |d| d } }.value] }
+    end
+
+    assert_raises(IOError) { ConnectionPool.after_fork }
+
+    assert_equal(prefork_connections.sort_by(&:object_id), closed.sort_by(&:object_id))
+    assert_equal([0, 0], pools.map(&:idle))
+    refute_includes(prefork_connections, pools.first.with { |c| c })
+  end
+
+  def test_after_fork_callback_when_checkin_raises
+    skip("MRI feature") unless Process.respond_to?(:fork)
+    GC.start # cleanup instances created by other tests
+
+    shutdown = []
+    pools = Array.new(2) { ConnectionPool.new(size: 1) { Object.new } }
+    checked_out = pools.map(&:checkout)
+    pools.each do |pool|
+      pool.shutdown do |c|
+        shutdown << c
+        raise IOError, "shutdown failed"
+      end
+    end
+
+    assert_raises(IOError) { ConnectionPool.after_fork }
+
+    assert_equal(checked_out.sort_by(&:object_id), shutdown.sort_by(&:object_id))
+  end
+
   def test_after_fork_callback_being_skipped
     skip("MRI feature") unless Process.respond_to?(:fork)
     GC.start # cleanup instances created by other tests

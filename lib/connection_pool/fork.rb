@@ -4,6 +4,7 @@ class ConnectionPool
     private_constant :INSTANCES
 
     def self.after_fork
+      error = nil
       INSTANCES.each_value do |pool|
         # We're in after_fork, so we know all other threads are dead.
         # All we need to do is ensure the main thread doesn't have a
@@ -13,8 +14,14 @@ class ConnectionPool
           # Unfortunately we don't know what method to call to close the connection,
           # so we try the most common one.
           connection.close if connection.respond_to?(:close)
+        rescue => e
+          error ||= e
         end
+      rescue => e
+        error ||= e
       end
+      raise error if error
+
       nil
     end
 
